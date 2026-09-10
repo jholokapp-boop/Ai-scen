@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+
+<title>SafeScan AI</title>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+<style>
+*{
+  box-sizing:border-box;
+  margin:0;
+  padding:0;
+  -webkit-tap-highlight-color:transparent;
+}
+
+body{
+  min-height:100vh;
+  background:#08090d;
+  color:#fff;
+  font-family:Arial,sans-serif;
+}
+
+.app{
+  max-width:600px;
+  margin:auto;
+  padding:22px 16px 40px;
+}
+
+.header{
+  text-align:center;
+  margin-bottom:20px;
+}
+
+.logo{
+  width:62px;
+  height:62px;
+  margin:auto;
+  border-radius:20px;
+  display:grid;
+  place-items:center;
+  font-size:28px;
+  background:linear-gradient(135deg,#6c5ce7,#00cec9);
+  box-shadow:0 10px 35px #0008;
+}
+
+h1{
+  margin-top:12px;
+  font-size:25px;
+}
+
+.sub{
+  color:#9da1ad;
+  margin-top:6px;
+  font-size:13px;
+}
+
+.card{
+  background:#11131a;
+  border:1px solid #252936;
+  border-radius:22px;
+  padding:16px;
+  margin-top:15px;
+}
+
+.drop{
+  border:2px dashed #353a4b;
+  border-radius:18px;
+  padding:35px 15px;
+  text-align:center;
+  cursor:pointer;
+}
+
+.drop strong{
+  display:block;
+  font-size:17px;
+  margin-bottom:7px;
+}
+
+.drop span{
+  color:#9297a5;
+  font-size:13px;
+}
+
+input{
+  display:none;
+}
+
+button{
+  width:100%;
+  border:0;
+  border-radius:15px;
+  padding:15px;
+  margin-top:12px;
+  font-size:15px;
+  font-weight:bold;
+  color:white;
+  background:#252a38;
+}
+
+button.primary{
+  background:linear-gradient(135deg,#6c5ce7,#00a8ff);
+}
+
+button:disabled{
+  opacity:.45;
+}
+
+video{
+  width:100%;
+  max-height:340px;
+  border-radius:17px;
+  background:#000;
+  margin-top:14px;
+}
+
+.status{
+  color:#aeb3c0;
+  font-size:13px;
+  text-align:center;
+  margin-top:12px;
+  line-height:1.5;
+}
+
+.progress{
+  height:7px;
+  background:#242733;
+  border-radius:20px;
+  overflow:hidden;
+  margin-top:12px;
+}
+
+.bar{
+  width:0%;
+  height:100%;
+  background:linear-gradient(90deg,#6c5ce7,#00cec9);
+  transition:.2s;
+}
+
+.result{
+  text-align:center;
+  padding:22px 10px;
+}
+
+.score{
+  font-size:55px;
+  font-weight:900;
+}
+
+.safe{
+  color:#00d084;
+}
+
+.unsafe{
+  color:#ff4757;
+}
+
+.resultTitle{
+  font-size:22px;
+  font-weight:bold;
+  margin-top:5px;
+}
+
+.details{
+  margin-top:15px;
+  color:#aeb3c0;
+  font-size:13px;
+  line-height:1.7;
+}
+
+.small{
+  color:#707585;
+  font-size:11px;
+  text-align:center;
+  margin-top:18px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <div class="header">
+    <div class="logo">🛡️</div>
+    <h1>SafeScan AI</h1>
+    <div class="sub">
+      Browser-based video safety scanner
+    </div>
+  </div>
+
+  <div class="card">
+
+    <div class="drop" id="drop">
+      <strong>🎥 ভিডিও দিন</strong>
+      <span>Tap করে ভিডিও নির্বাচন করুন অথবা এখানে Drop করুন</span>
+      <input id="file" type="file" accept="video/*">
+    </div>
+
+    <video id="preview" controls playsinline hidden></video>
+
+    <button id="modelBtn" class="primary">
+      ⬇️ Download AI Model
+    </button>
+
+    <button id="scanBtn" disabled>
+      🔍 Scan Video
+    </button>
+
+    <div class="progress">
+      <div class="bar" id="bar"></div>
+    </div>
+
+    <div class="status" id="status">
+      AI model এখনো প্রস্তুত নয়।
+    </div>
+
+  </div>
+
+  <div class="card" id="resultCard" hidden>
+    <div class="result">
+
+      <div class="score" id="score">0%</div>
+
+      <div class="resultTitle" id="resultTitle">
+        অপেক্ষা করুন...
+      </div>
+
+      <div class="details" id="details"></div>
+
+    </div>
+  </div>
+
+  <div class="small">
+    Processing happens in your browser. Video is not uploaded by this app.
+  </div>
+
+</div>
+
+<script>
+
+const MODEL_URL =
+"https://huggingface.co/zhangsongbo365/nudenet_onnx/resolve/main/320n.onnx?download=true";
+
+const CACHE_NAME = "safescan-ai-model-v1";
+const MODEL_KEY = "nudenet-320n.onnx";
+
+const fileInput = document.getElementById("file");
+const drop = document.getElementById("drop");
+const preview = document.getElementById("preview");
+const modelBtn = document.getElementById("modelBtn");
+const scanBtn = document.getElementById("scanBtn");
+
+const statusEl = document.getElementById("status");
+const bar = document.getElementById("bar");
+
+const resultCard = document.getElementById("resultCard");
+const scoreEl = document.getElementById("score");
+const resultTitle = document.getElementById("resultTitle");
+const details = document.getElementById("details");
+
+let videoFile = null;
+let session = null;
+let modelBuffer = null;
+
+
+/* =========================
+   NUDE/ADULT RELATED LABELS
+========================= */
+
+const LABELS = [
+  "FEMALE_GENITALIA_COVERED",
+  "FACE_FEMALE",
+  "BUTTOCKS_EXPOSED",
+  "FEMALE_BREAST_EXPOSED",
+  "FEMALE_GENITALIA_EXPOSED",
+  "MALE_BREAST_EXPOSED",
+  "ANUS_EXPOSED",
+  "FEET_EXPOSED",
+  "BELLY_COVERED",
+  "FEET_COVERED",
+  "ARMPITS_COVERED",
+  "ARMPITS_EXPOSED",
+  "FACE_MALE",
+  "BELLY_EXPOSED",
+  "BUTTOCKS_COVERED",
+  "FEMALE_BREAST_COVERED",
+  "MALE_GENITALIA_EXPOSED",
+  "MALE_GENITALIA_COVERED"
+];
+
+
+/* Only these affect the overall safety score */
+const UNSAFE_LABELS = new Set([
+  "FEMALE_BREAST_EXPOSED",
+  "FEMALE_GENITALIA_EXPOSED",
+  "MALE_GENITALIA_EXPOSED",
+  "ANUS_EXPOSED",
+  "BUTTOCKS_EXPOSED"
+]);
+
+
+/* =========================
+   BASIC UI
+========================= */
+
+drop.onclick = () => fileInput.click();
+
+fileInput.onchange = () => {
+  if(fileInput.files.length){
+    loadVideo(fileInput.files[0]);
+  }
+};
+
+
+/* Drag & Drop */
+
+drop.addEventListener("dragover", e=>{
+  e.preventDefault();
+});
+
+drop.addEventListener("drop", e=>{
+  e.preventDefault();
+
+  const f = e.dataTransfer.files[0];
+
+  if(f && f.type.startsWith("video/")){
+    loadVideo(f);
+  }
+});
+
+
+function loadVideo(file){
+
+  videoFile = file;
+
+  const url = URL.createObjectURL(file);
+
+  preview.src = url;
+  preview.hidden = false;
+
+  statusEl.textContent =
+    "ভিডিও নির্বাচন করা হয়েছে।";
+
+  resultCard.hidden = true;
+
+  scanBtn.disabled = !session;
+
+}
+
+
+/* =========================
+   MODEL CACHE
+========================= */
+
+async function getCachedModel(){
+
+  if(!("caches" in window)){
+    return null;
+  }
+
+  const cache = await caches.open(CACHE_NAME);
+  const response = await cache.match(MODEL_KEY);
+
+  if(!response) return null;
+
+  return await response.arrayBuffer();
+}
+
+
+/* =========================
+   DOWNLOAD MODEL
+========================= */
+
+async function downloadModel(){
+
+  statusEl.textContent =
+    "AI Model খোঁজা হচ্ছে...";
+
+  bar.style.width = "5%";
+
+  const cached = await getCachedModel();
+
+  if(cached){
+
+    modelBuffer = cached;
+
+    statusEl.textContent =
+      "AI Model আগে থেকেই ফোনে আছে।";
+
+    bar.style.width = "100%";
+
+    return;
+  }
+
+
+  statusEl.textContent =
+    "প্রায় 12 MB AI Model ডাউনলোড হচ্ছে...";
+
+
+  const response = await fetch(MODEL_URL);
+
+  if(!response.ok){
+    throw new Error("Model download failed");
+  }
+
+
+  const total =
+    Number(response.headers.get("content-length")) || 0;
+
+  const reader = response.body.getReader();
+
+  const chunks = [];
+
+  let received = 0;
+
+
+  while(true){
+
+    const {done,value} = await reader.read();
+
+    if(done) break;
+
+    chunks.push(value);
+
+    received += value.length;
+
+    if(total){
+
+      const percent =
+        Math.min(99,(received/total)*100);
+
+      bar.style.width =
+        percent.toFixed(1)+"%";
+    }
+  }
+
+
+  const blob = new Blob(chunks);
+
+  modelBuffer = await blob.arrayBuffer();
+
+
+  /* Save for future use */
+
+  if("caches" in window){
+
+    const cache =
+      await caches.open(CACHE_NAME);
+
+    await cache.put(
+      MODEL_KEY,
+      new Response(modelBuffer)
+    );
+  }
+
+
+  bar.style.width = "100%";
+
+  statusEl.textContent =
+    "AI Model ডাউনলোড সম্পূর্ণ।";
+}
+
+
+/* =========================
+   CREATE ONNX SESSION
+========================= */
+
+async function prepareAI(){
+
+  if(!modelBuffer){
+
+    await downloadModel();
+  }
+
+
+  statusEl.textContent =
+    "AI engine চালু হচ্ছে...";
+
+
+  ort.env.wasm.wasmPaths =
+    "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+
+
+  session =
+    await ort.InferenceSession.create(
+      modelBuffer,
+      {
+        executionProviders:["wasm"],
+        graphOptimizationLevel:"all"
+      }
+    );
+
+
+  statusEl.textContent =
+    "AI প্রস্তুত। এখন ভিডিও Scan করতে পারেন।";
+
+  scanBtn.disabled = !videoFile;
+}
+
+
+/* =========================
+   MODEL BUTTON
+========================= */
+
+modelBtn.onclick = async ()=>{
+
+  modelBtn.disabled = true;
+
+  try{
+
+    await prepareAI();
+
+    modelBtn.textContent =
+      "✓ AI Model Ready";
+
+  }catch(err){
+
+    console.error(err);
+
+    statusEl.textContent =
+      "Model load করতে সমস্যা হয়েছে।";
+
+    modelBtn.disabled = false;
+  }
+};
+
+
+/* =========================
+   IMAGE → MODEL TENSOR
+========================= */
+
+const canvas =
+  document.createElement("canvas");
+
+const ctx =
+  canvas.getContext("2d");
+
+
+function makeTensor(video){
+
+  const size = 320;
+
+  canvas.width = size;
+  canvas.height = size;
+
+  ctx.drawImage(
+    video,
+    0,
+    0,
+    size,
+    size
+  );
+
+
+  const image =
+    ctx.getImageData(
+      0,
+      0,
+      size,
+      size
+    );
+
+
+  const data =
+    new Float32Array(
+      3 * size * size
+    );
+
+
+  let p = 0;
+
+  /* RGB → CHW */
+
+  for(let y=0;y<size;y++){
+
+    for(let x=0;x<size;x++){
+
+      const i =
+        (y*size+x)*4;
+
+      data[p] =
+        image.data[i] / 255;
+
+      data[size*size+p] =
+        image.data[i+1] / 255;
+
+      data[2*size*size+p] =
+        image.data[i+2] / 255;
+
+      p++;
+    }
+  }
+
+
+  return new ort.Tensor(
+    "float32",
+    data,
+    [1,3,size,size]
+  );
+}
+
+
+/* =========================
+   RUN ONE FRAME
+========================= */
+
+async function scanFrame(video){
+
+  const tensor =
+    makeTensor(video);
+
+
+  const inputName =
+    session.inputNames[0];
+
+
+  const outputs =
+    await session.run({
+      [inputName]:tensor
+    });
+
+
+  const output =
+    outputs[session.outputNames[0]];
+
+
+  const arr =
+    output.data;
+
+
+  const dims =
+    output.dims;
+
+
+  /*
+     YOLOv8-style output:
+     [1, classes+4, detections]
+     or
+     [1, detections, classes+4]
+  */
+
+
+  let detections = [];
+
+
+  let rows;
+  let cols;
+
+
+  if(dims.length === 3){
+
+    if(dims[1] < dims[2]){
+
+      rows = dims[2];
+      cols = dims[1];
+
+      for(let r=0;r<rows;r++){
+
+        const values = [];
+
+        for(let c=0;c<cols;c++){
+          values.push(
+            arr[c*rows+r]
+          );
+        }
+
+        detections.push(values);
+      }
+
+    }else{
+
+      rows = dims[1];
+      cols = dims[2];
+
+      for(let r=0;r<rows;r++){
+
+        detections.push(
+          Array.from(
+            arr.slice(
+              r*cols,
+              (r+1)*cols
+            )
+          )
+        );
+      }
+    }
+  }
+
+
+  let highest = 0;
+
+  let found = [];
+
+
+  for(const d of detections){
+
+    if(d.length < 6) continue;
+
+
+    let bestClass = -1;
+    let bestScore = 0;
+
+
+    for(let c=4;c<d.length;c++){
+
+      const score = d[c];
+
+      if(score > bestScore){
+
+        bestScore = score;
+        bestClass = c-4;
+      }
+    }
+
+
+    if(
+      bestClass >= 0 &&
+      bestScore >= 0.35 &&
+      LABELS[bestClass]
+    ){
+
+      const label =
+        LABELS[bestClass];
+
+
+      if(UNSAFE_LABELS.has(label)){
+
+        highest =
+          Math.max(
+            highest,
+            bestScore
+          );
+
+
+        found.push({
+          label,
+          score:bestScore
+        });
+      }
+    }
+  }
+
+
+  return {
+    score:highest,
+    found
+  };
+}
+
+
+/* =========================
+   SEEK VIDEO
+========================= */
+
+function seekVideo(video,time){
+
+  return new Promise(resolve=>{
+
+    const done = ()=>{
+
+      video.removeEventListener(
+        "seeked",
+        done
+      );
+
+      resolve();
+    };
+
+    video.addEventListener(
+      "seeked",
+      done
+    );
+
+    video.currentTime = time;
+  });
+}
+
+
+/* =========================
+   SCAN VIDEO
+========================= */
+
+scanBtn.onclick = async ()=>{
+
+  if(!videoFile || !session) return;
+
+
+  scanBtn.disabled = true;
+  resultCard.hidden = true;
+
+  try{
+
+    const video =
+      document.createElement("video");
+
+    video.src =
+      URL.createObjectURL(videoFile);
+
+    video.muted = true;
+    video.playsInline = true;
+
+
+    await new Promise(resolve=>{
+      video.onloadedmetadata = resolve;
+    });
+
+
+    const duration =
+      Math.min(
+        video.duration,
+        15
+      );
+
+
+    /*
+       20 samples maximum
+       ≈ every 0.75 second
+    */
+
+    const sampleCount =
+      Math.min(
+        20,
+        Math.max(
+          1,
+          Math.ceil(duration/0.75)
+        )
+      );
+
+
+    let globalScore = 0;
+
+    let unsafeFrames = 0;
+
+    let totalFound = 0;
+
+
+    statusEl.textContent =
+      "ভিডিও বিশ্লেষণ শুরু হয়েছে...";
+
+
+    for(
+      let i=0;
+      i<sampleCount;
+      i++
+    ){
+
+      const time =
+        sampleCount === 1
+        ? 0
+        : (duration*i)/(sampleCount-1);
+
+
+      await seekVideo(video,time);
+
+
+      const result =
+        await scanFrame(video);
+
+
+      globalScore =
+        Math.max(
+          globalScore,
+          result.score
+        );
+
+
+      if(result.score >= 0.45){
+
+        unsafeFrames++;
+      }
+
+
+      totalFound +=
+        result.found.length;
+
+
+      bar.style.width =
+        (((i+1)/sampleCount)*100)
+        .toFixed(0)+"%";
+
+
+      statusEl.textContent =
+        `Scanning ${i+1}/${sampleCount} frame...`;
+    }
+
+
+    showResult(
+      globalScore,
+      unsafeFrames,
+      sampleCount,
+      totalFound
+    );
+
+
+  }catch(err){
+
+    console.error(err);
+
+    statusEl.textContent =
+      "ভিডিও scan করতে সমস্যা হয়েছে।";
+
+  }
+
+
+  scanBtn.disabled = false;
+};
+
+
+/* =========================
+   RESULT
+========================= */
+
+function showResult(
+  score,
+  unsafeFrames,
+  totalFrames,
+  totalFound
+){
+
+  resultCard.hidden = false;
+
+
+  const percent =
+    Math.round(score*100);
+
+
+  scoreEl.textContent =
+    percent+"%";
+
+
+  if(score >= 0.45){
+
+    scoreEl.className =
+      "score unsafe";
+
+    resultTitle.textContent =
+      "⚠️ সম্ভাব্য Unsafe Content";
+
+  }else{
+
+    scoreEl.className =
+      "score safe";
+
+    resultTitle.textContent =
+      "✓ সম্ভাব্য Safe";
+
+  }
+
+
+  details.innerHTML = `
+    <b>Maximum confidence:</b> ${percent}%<br>
+    <b>Analyzed frames:</b> ${totalFrames}<br>
+    <b>Flagged frames:</b> ${unsafeFrames}<br>
+    <b>Detections:</b> ${totalFound}
+    <br><br>
+    এটি AI-এর confidence score; 100% নিশ্চয়তা নয়।
+  `;
+}
+
+</script>
+
+</body>
+</html>
